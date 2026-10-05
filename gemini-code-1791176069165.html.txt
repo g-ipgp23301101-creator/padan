@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Misi Usahawan Berwawasan - AR Hand Tracking</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        * {
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background-color: #030712;
+            color: #f3f4f6;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+        .font-orbitron {
+            font-family: 'Orbitron', sans-serif;
+        }
+        /* Hologram Canvas & Video */
+        #webcam {
+            transform: scaleX(-1);
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            object-fit: cover;
+            z-index: 1;
+            opacity: 0.65;
+            filter: brightness(1.15) contrast(1.1) saturate(1.2);
+        }
+        #hand-canvas {
+            transform: scaleX(-1);
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 2;
+            pointer-events: none;
+        }
+        /* HUD Glassmorphism */
+        .hud-panel {
+            background: rgba(10, 25, 47, 0.65);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+            box-shadow: 0 0 25px rgba(6, 182, 212, 0.25), inset 0 0 15px rgba(6, 182, 212, 0.1);
+        }
+        .hud-border-cyan {
+            border-color: rgba(6, 182, 212, 0.6);
+            box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
+        }
+        .hud-border-gold {
+            border-color: rgba(245, 158, 11, 0.8);
+            box-shadow: 0 0 20px rgba(245, 158, 11, 0.5);
+        }
+        .hud-border-green {
+            border-color: rgba(16, 185, 129, 0.8);
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+        }
+        /* Grid Overlay */
+        .holo-grid {
+            background-image: 
+                linear-gradient(to right, rgba(6, 182, 212, 0.08) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(6, 182, 212, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        /* Scanlines */
+        .scanline {
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(6, 182, 212, 0.06) 50%,
+                rgba(6, 182, 212, 0.06)
+            );
+            background-size: 100% 4px;
+        }
+        /* Card Glowing & Floating */
+        .holo-card {
+            transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.85), rgba(6, 182, 212, 0.15));
+            backdrop-filter: blur(8px);
+        }
+        .holo-card.locked {
+            border-color: #f59e0b !important;
+            box-shadow: 0 0 30px #f59e0b, inset 0 0 15px #f59e0b !important;
+            background: linear-gradient(135deg, rgba(30, 27, 75, 0.9), rgba(245, 158, 11, 0.3)) !important;
+            scale: 1.05;
+        }
+        /* Shake Animation */
+        @keyframes shake {
+            0%, 100% { transform: translate(0, 0); }
+            20%, 60% { transform: translate(-8px, 0); }
+            40%, 80% { transform: translate(8px, 0); }
+        }
+        .animate-shake {
+            animation: shake 0.4s ease-in-out;
+        }
+    </style>
+</head>
+<body class="holo-grid scanline relative flex flex-col justify-between p-4 select-none overflow-hidden">
+
+    <!-- WEBCAM & HOLOGRAM CANVAS -->
+    <video id="webcam" playsinline></video>
+    <canvas id="hand-canvas"></canvas>
+
+    <!-- UI LAYER (Z-INDEX 10) -->
+    <div id="game-ui" class="relative z-10 w-full h-full flex flex-col justify-between pointer-events-none">
+
+        <!-- HEADER / TOP HUD -->
+        <header class="flex justify-between items-center w-full max-w-6xl mx-auto hud-panel p-3 px-6 rounded-2xl pointer-events-auto">
+            <div>
+                <h1 class="text-xl md:text-2xl font-bold font-orbitron text-cyan-400 tracking-wider flex items-center gap-2">
+                    <span>🚀</span> MISI USAHAWAN BERWAWASAN
+                </h1>
+                <p class="text-xs md:text-sm text-cyan-200/80 font-semibold tracking-widest uppercase">
+                    PUSAT DATA USAHAWAN • PdP Bahasa Melayu Tahun 5
+                </p>
+            </div>
+
+            <!-- STATS DISPLAY -->
+            <div class="flex items-center gap-4 md:gap-8 font-orbitron text-sm md:text-base">
+                <div class="text-center">
+                    <div class="text-xs text-cyan-300/70">SKOR</div>
+                    <div id="score-val" class="text-xl md:text-2xl font-black text-amber-400">0</div>
+                </div>
+                <div class="text-center">
+                    <div class="text-xs text-cyan-300/70">MISI</div>
+                    <div id="mission-val" class="text-xl md:text-2xl font-black text-cyan-400">1 / 6</div>
+                </div>
+                <div class="text-center">
+                    <div class="text-xs text-cyan-300/70">KETEPATAN</div>
+                    <div id="acc-val" class="text-xl md:text-2xl font-black text-emerald-400">100%</div>
+                </div>
+            </div>
+        </header>
+
+        <!-- MAIN GAME AREA -->
+        <main class="flex-1 w-full max-w-6xl mx-auto my-3 flex flex-col justify-between relative">
+            
+            <!-- CURRENT QUESTION / CATEGORY TARGET ZONE -->
+            <div id="target-zone" class="hud-panel hud-border-cyan rounded-2xl p-4 md:p-6 text-center relative transition-all duration-300 pointer-events-auto">
+                <div class="inline-block px-3 py-1 bg-cyan-950/80 border border-cyan-500/50 rounded-full text-cyan-300 text-xs font-orbitron mb-2 tracking-widest uppercase">
+                    KATEGORI SASARAN (<span id="cat-num">1</span>/6)
+                </div>
+                <h2 id="category-title" class="text-2xl md:text-4xl font-black font-orbitron text-cyan-300 tracking-wide uppercase drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]">
+                    1. 👤 NAMA USAHAWAN
+                </h2>
+                <p id="category-prompt" class="text-sm md:text-base text-gray-300 mt-1 font-medium">
+                    Soalan: Siapakah nama usahawan berwawasan ini?
+                </p>
+
+                <!-- Feedback Toast inside Category -->
+                <div id="feedback-banner" class="hidden absolute inset-0 rounded-2xl flex items-center justify-center font-orbitron text-2xl md:text-3xl font-black tracking-wider transition-all duration-200">
+                    <!-- Dynamic text inserted here -->
+                </div>
+            </div>
+
+            <!-- STATUS INDICATOR (HAND STATUS & CAMERA MSG) -->
+            <div class="flex justify-between items-center px-2 my-1 font-orbitron text-xs md:text-sm">
+                <div id="hand-status" class="hud-panel px-3 py-1.5 rounded-lg text-cyan-300 border border-cyan-500/30 flex items-center gap-2">
+                    <span>🖐️</span> <span>MENGESAN TANGAN...</span>
+                </div>
+                <div id="mode-status" class="hud-panel px-3 py-1.5 rounded-lg text-amber-300 border border-amber-500/30">
+                    📷 MOD KAMERA AKTIF
+                </div>
+            </div>
+
+            <!-- CARDS CONTAINER (FLOATING OPTIONS) -->
+            <div id="cards-container" class="relative h-48 md:h-56 w-full pointer-events-auto">
+                <!-- Answer Cards injected via JS -->
+            </div>
+        </main>
+
+        <!-- FOOTER HUD -->
+        <footer class="w-full max-w-6xl mx-auto text-center font-orbitron text-xs text-cyan-400/70 p-2 hud-panel rounded-xl">
+            SISTEM KONTROL GESTUR: CUBIT (IBU JARI + TELUNJUK) UNTUK MEMEGANG KAD • BUKA JARI UNTUK MELEPAS
+        </footer>
+    </div>
+
+    <!-- START OVERLAY SCREEN -->
+    <div id="start-overlay" class="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="hud-panel hud-border-cyan rounded-3xl p-6 md:p-10 max-w-xl w-full text-center relative overflow-hidden">
+            <div class="text-5xl md:text-6xl mb-4 animate-bounce">🚀</div>
+            <h1 class="text-2xl md:text-4xl font-black font-orbitron text-cyan-400 mb-2 tracking-wider">
+                MISI USAHAWAN BERWAWASAN
+            </h1>
+            <p class="text-cyan-200 text-sm md:text-base mb-6 font-semibold">
+                PADANKAN MAKLUMAT USAHAWAN
+            </p>
+            <div class="bg-cyan-950/60 border border-cyan-500/30 rounded-2xl p-4 mb-6 text-left text-xs md:text-sm text-gray-300 space-y-2 font-medium">
+                <p class="text-amber-400 font-orbitron font-bold">🎯 ARAHAN MISI:</p>
+                <p>1. Benarkan akses kamera untuk pengesanan tangan AR.</p>
+                <p>2. Hulurkan tangan di hadapan kamera. Gunakan <span class="text-cyan-300 font-bold">Jari Telunjuk</span> untuk mengawal sasaran retikel.</p>
+                <p>3. <span class="text-amber-300 font-bold">Cubit (Ibu Jari + Telunjuk)</span> pada kad jawapan untuk memegang & menggerakkannya secara maya.</p>
+                <p>4. Bawa kad ke petak <span class="text-emerald-400 font-bold">KATEGORI SASARAN</span> dan lepas cubitan untuk menyemak jawapan.</p>
+            </div>
+            <button id="btn-start" class="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black font-orbitron text-lg md:text-xl rounded-xl shadow-[0_0_25px_rgba(6,182,212,0.8)] transition-all transform hover:scale-105 active:scale-95">
+                ▶ MULA MISI SEKARANG
+            </button>
+        </div>
+    </div>
+
+    <!-- END GAME OVERLAY SCREEN -->
+    <div id="end-overlay" class="hidden fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="hud-panel hud-border-gold rounded-3xl p-6 md:p-10 max-w-xl w-full text-center relative">
+            <div class="text-6xl mb-4 animate-pulse">🎉</div>
+            <h1 class="text-3xl md:text-4xl font-black font-orbitron text-amber-400 mb-2 tracking-wider">
+                MISI SELESAI!
+            </h1>
+            <p class="text-gray-300 text-sm md:text-base mb-6 font-semibold">
+                Tahniah! Anda telah berjaya memadankan semua maklumat usahawan berwawasan.
+            </p>
+
+            <div class="grid grid-cols-3 gap-3 mb-8 font-orbitron">
+                <div class="bg-slate-900/80 p-3 rounded-xl border border-amber-500/40">
+                    <div class="text-xs text-gray-400">SKOR AKHIR</div>
+                    <div id="final-score" class="text-2xl font-black text-amber-400">0</div>
+                </div>
+                <div class="bg-slate-900/80 p-3 rounded-xl border border-cyan-500/40">
+                    <div class="text-xs text-gray-400">PADANAN</div>
+                    <div id="final-matches" class="text-2xl font-black text-cyan-400">6 / 6</div>
+                </div>
+                <div class="bg-slate-900/80 p-3 rounded-xl border border-emerald-500/40">
+                    <div class="text-xs text-gray-400">KETEPATAN</div>
+                    <div id="final-acc" class="text-2xl font-black text-emerald-400">100%</div>
+                </div>
+            </div>
+
+            <button id="btn-restart" class="w-full py-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black font-orbitron text-lg md:text-xl rounded-xl shadow-[0_0_25px_rgba(245,158,11,0.8)] transition-all transform hover:scale-105 active:scale-95">
+                ↻ MAIN SEMULA
+            </button>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT GAME ENGINE -->
+    <script>
+        /* ==========================================================================
+           1. GAME DATA & STATE MANAGEMENT
+           ========================================================================== */
+        const GAME_DATA = [
+            {
+                id: 1,
+                category: "1. 👤 NAMA USAHAWAN",
+                prompt: "Soalan: Siapakah nama usahawan berwawasan ini?",
+                correct: "Aiman",
+                distractors: ["Hakim", "Amir"]
+            },
+            {
+                id: 2,
+                category: "2. 🏪 JENIS PERNIAGAAN",
+                prompt: "Soalan: Apakah jenis perniagaan yang dijalankan?",
+                correct: "Perniagaan makanan",
+                distractors: ["Perniagaan pakaian", "Perkhidmatan kurier"]
+            },
+            {
+                id: 3,
+                category: "3. 📦 PRODUK",
+                prompt: "Soalan: Apakah produk utama usahawan ini?",
+                correct: "Kerepek pisang",
+                distractors: ["Kek coklat", "Jus buah-buahan"]
+            },
+            {
+                id: 4,
+                category: "4. 🏠 CARA MEMULAKAN",
+                prompt: "Soalan: Bagaimanakah perniagaan ini dimulakan?",
+                correct: "Bermula dari rumah",
+                distractors: ["Membeli kedai besar", "Meminjam bank juta-juta"]
+            },
+            {
+                id: 5,
+                category: "5. 💪 CIRI USAHAWAN",
+                prompt: "Soalan: Apakah ciri terpuji usahawan berwawasan tersebut?",
+                correct: "Rajin dan tidak berputus asa",
+                distractors: ["Cepat mengalah", "Suka bertangguh kerja"]
+            },
+            {
+                id: 6,
+                category: "6. 🚀 USAHA / PENCAPAIAN",
+                prompt: "Soalan: Apakah usaha / pencapaian kejayaan usahawan tersebut?",
+                correct: "Mempromosikan melalui media sosial",
+                distractors: ["Menunggu pelanggan datang", "Menjual di kawasan rumah sahaja"]
+            }
+        ];
+
+        let currentStep = 0;
+        let score = 0;
+        let totalAttempts = 0;
+        let correctMatches = 0;
+
+        // Interaction State
+        let isPinching = false;
+        let activeCardIndex = -1;
+        let pointerPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        let smoothedPointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        let cardsState = [];
+        let isTouchMode = false;
+
+        /* ==========================================================================
+           2. WEB AUDIO API SOUND SYNTHESIZER
+           ========================================================================== */
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+            }
+            init() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+            playPickup() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, this.ctx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.1);
+            }
+            playCorrect() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                [523.25, 659.25, 783.99, 1046.50].forEach((freq, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, now + idx * 0.06);
+                    gain.gain.setValueAtTime(0.2, now + idx * 0.06);
+                    gain.gain.linearRampToValueAtTime(0.01, now + idx * 0.06 + 0.2);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(now + idx * 0.06);
+                    osc.stop(now + idx * 0.06 + 0.2);
+                });
+            }
+            playWrong() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(180, now);
+                osc.frequency.exponentialRampToValueAtTime(90, now + 0.25);
+                gain.gain.setValueAtTime(0.25, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.25);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.25);
+            }
+            playComplete() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                [440, 554.37, 659.25, 880, 1108.73].forEach((freq, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + idx * 0.1);
+                    gain.gain.setValueAtTime(0.25, now + idx * 0.1);
+                    gain.gain.linearRampToValueAtTime(0.01, now + idx * 0.1 + 0.4);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(now + idx * 0.1);
+                    osc.stop(now + idx * 0.1 + 0.4);
+                });
+            }
+        }
+        const sounds = new SoundEngine();
+
+        /* ==========================================================================
+           3. CANVAS & RENDERING setup
+           ========================================================================== */
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('hand-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        /* ==========================================================================
+           4. GAME LOGIC & STEP MANAGEMENT
+           ========================================================================== */
+        function initStep(stepIdx) {
+            if (stepIdx >= GAME_DATA.length) {
+                endGame();
+                return;
+            }
+
+            const data = GAME_DATA[stepIdx];
+            document.getElementById('cat-num').innerText = stepIdx + 1;
+            document.getElementById('category-title').innerText = data.category;
+            document.getElementById('category-prompt').innerText = data.prompt;
+            document.getElementById('mission-val').innerText = `${stepIdx + 1} / 6`;
+
+            // Prepare answers: 1 correct + distractors (shuffled)
+            const options = [data.correct, ...data.distractors].sort(() => Math.random() - 0.5);
+            
+            const container = document.getElementById('cards-container');
+            container.innerHTML = '';
+            cardsState = [];
+
+            const containerRect = container.getBoundingClientRect();
+            const cardWidth = Math.min(260, (containerRect.width - 40) / options.length);
+
+            options.forEach((text, i) => {
+                const cardEl = document.createElement('div');
+                cardEl.className = 'holo-card absolute hud-panel hud-border-cyan rounded-xl p-3 md:p-4 text-center text-cyan-200 font-bold font-orbitron text-sm md:text-base cursor-pointer select-none flex flex-col justify-center items-center shadow-lg';
+                cardEl.style.width = `${cardWidth}px`;
+                cardEl.style.height = '100px';
+
+                // Calculate initial positions evenly distributed
+                const spacing = containerRect.width / options.length;
+                const initialX = containerRect.left + (spacing * i) + (spacing / 2) - (cardWidth / 2);
+                const initialY = containerRect.top + 20;
+
+                cardEl.innerText = text;
+                document.body.appendChild(cardEl); // Append to body for smooth absolute positioning across screen
+
+                const cardObj = {
+                    element: cardEl,
+                    text: text,
+                    isCorrect: text === data.correct,
+                    x: initialX,
+                    y: initialY,
+                    homeX: initialX,
+                    homeY: initialY,
+                    width: cardWidth,
+                    height: 100,
+                    isLocked: false
+                };
+
+                cardsState.push(cardObj);
+                updateCardDOM(cardObj);
+
+                // Touch / Mouse Fallback setup
+                cardEl.addEventListener('pointerdown', (e) => {
+                    if (isTouchMode || !handDetected) {
+                        e.preventDefault();
+                        activeCardIndex = i;
+                        isPinching = true;
+                        sounds.playPickup();
+                        pointerPos.x = e.clientX;
+                        pointerPos.y = e.clientY;
+                    }
+                });
+            });
+        }
+
+        function updateCardDOM(cardObj) {
+            cardObj.element.style.transform = `translate3d(${cardObj.x}px, ${cardObj.y}px, 0px)`;
+        }
+
+        /* ==========================================================================
+           5. INTERACTION ENGINE (SMOOTHING, PINCH & COLLISION)
+           ========================================================================== */
+        let handDetected = false;
+
+        function updatePhysics() {
+            // Smooth pointer position (Lerp)
+            smoothedPointer.x += (pointerPos.x - smoothedPointer.x) * 0.35;
+            smoothedPointer.y += (pointerPos.y - smoothedPointer.y) * 0.35;
+
+            // Handle Card Dragging
+            if (isPinching && activeCardIndex !== -1) {
+                const card = cardsState[activeCardIndex];
+                if (card && !card.isLocked) {
+                    card.x = smoothedPointer.x - card.width / 2;
+                    card.y = smoothedPointer.y - card.height / 2;
+                    card.element.classList.add('locked');
+                    updateCardDOM(card);
+                }
+            } else if (!isPinching && activeCardIndex !== -1) {
+                // RELEASE EVENT
+                const card = cardsState[activeCardIndex];
+                if (card) {
+                    checkCardPlacement(card);
+                }
+                activeCardIndex = -1;
+            }
+
+            // Proximity Hover Detection (if not holding a card)
+            if (!isPinching && activeCardIndex === -1) {
+                cardsState.forEach((card, idx) => {
+                    if (card.isLocked) return;
+                    const cardCenterX = card.x + card.width / 2;
+                    const cardCenterY = card.y + card.height / 2;
+                    const dist = Math.hypot(smoothedPointer.x - cardCenterX, smoothedPointer.y - cardCenterY);
+
+                    if (dist < 80) {
+                        card.element.style.borderColor = '#f59e0b';
+                        card.element.style.boxShadow = '0 0 20px #f59e0b';
+                    } else {
+                        card.element.style.borderColor = 'rgba(6, 182, 212, 0.6)';
+                        card.element.style.boxShadow = '0 0 15px rgba(6, 182, 212, 0.3)';
+                    }
+                });
+            }
+
+            requestAnimationFrame(updatePhysics);
+        }
+
+        function checkCardPlacement(card) {
+            const targetZone = document.getElementById('target-zone').getBoundingClientRect();
+            const cardCenterX = card.x + card.width / 2;
+            const cardCenterY = card.y + card.height / 2;
+
+            // Check if card dropped inside Target Zone
+            const isInsideTarget = (
+                cardCenterX >= targetZone.left &&
+                cardCenterX <= targetZone.right &&
+                cardCenterY >= targetZone.top &&
+                cardCenterY <= targetZone.bottom
+            );
+
+            totalAttempts++;
+
+            if (isInsideTarget) {
+                if (card.isCorrect) {
+                    // CORRECT MATCH
+                    sounds.playCorrect();
+                    score += 10;
+                    correctMatches++;
+                    card.isLocked = true;
+                    showFeedback(true, "✓ PADANAN BETUL!");
+                    
+                    // Fly into target zone nicely
+                    card.x = targetZone.left + (targetZone.width / 2) - (card.width / 2);
+                    card.y = targetZone.top + (targetZone.height / 2) - (card.height / 2);
+                    card.element.classList.remove('locked');
+                    card.element.classList.add('hud-border-green');
+                    updateCardDOM(card);
+
+                    updateStats();
+
+                    // Cleanup current cards and advance step after delay
+                    setTimeout(() => {
+                        cardsState.forEach(c => c.element.remove());
+                        currentStep++;
+                        initStep(currentStep);
+                    }, 1200);
+
+                } else {
+                    // WRONG MATCH
+                    sounds.playWrong();
+                    score = Math.max(0, score - 3);
+                    showFeedback(false, "✕ CUBA LAGI!");
+                    
+                    // Animate target zone shake
+                    const targetEl = document.getElementById('target-zone');
+                    targetEl.classList.add('animate-shake');
+                    setTimeout(() => targetEl.classList.remove('animate-shake'), 400);
+
+                    // Return card to home position
+                    card.x = card.homeX;
+                    card.y = card.homeY;
+                    card.element.classList.remove('locked');
+                    updateCardDOM(card);
+
+                    updateStats();
+                }
+            } else {
+                // Dropped outside - return to home
+                card.x = card.homeX;
+                card.y = card.homeY;
+                card.element.classList.remove('locked');
+                updateCardDOM(card);
+            }
+        }
+
+        function showFeedback(isSuccess, text) {
+            const banner = document.getElementById('feedback-banner');
+            banner.innerText = text;
+            banner.className = `absolute inset-0 rounded-2xl flex items-center justify-center font-orbitron text-2xl md:text-3xl font-black tracking-wider transition-all duration-200 z-20 ${
+                isSuccess ? 'bg-emerald-950/90 text-emerald-400 border-2 border-emerald-500 shadow-[0_0_30px_#10b981]' : 'bg-rose-950/90 text-rose-400 border-2 border-rose-500 shadow-[0_0_30px_#f43f5e]'
+            }`;
+            banner.classList.remove('hidden');
+            setTimeout(() => {
+                banner.classList.add('hidden');
+            }, 1000);
+        }
+
+        function updateStats() {
+            document.getElementById('score-val').innerText = score;
+            const accuracy = totalAttempts > 0 ? Math.round((correctMatches / totalAttempts) * 100) : 100;
+            document.getElementById('acc-val').innerText = `${accuracy}%`;
+        }
+
+        function endGame() {
+            sounds.playComplete();
+            document.getElementById('end-overlay').classList.remove('hidden');
+            document.getElementById('final-score').innerText = score;
+            document.getElementById('final-matches').innerText = `${correctMatches} / 6`;
+            const accuracy = totalAttempts > 0 ? Math.round((correctMatches / totalAttempts) * 100) : 100;
+            document.getElementById('final-acc').innerText = `${accuracy}%`;
+        }
+
+        /* ==========================================================================
+           6. MEDIAPIPE HANDS & DRAWING ENGINE
+           ========================================================================== */
+        function onHandResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                handDetected = true;
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Draw Cyberpunk Hand Skeleton
+                drawCyberHand(landmarks);
+
+                // Landmark 4 = Thumb Tip, Landmark 8 = Index Tip
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+
+                // Screen coordinates (Note: scaleX(-1) mirror correction)
+                const indexX = (1 - indexTip.x) * canvasElement.width;
+                const indexY = indexTip.y * canvasElement.height;
+                const thumbX = (1 - thumbTip.x) * canvasElement.width;
+                const thumbY = thumbTip.y * canvasElement.height;
+
+                // Update pointer location to index tip
+                pointerPos.x = indexX;
+                pointerPos.y = indexY;
+
+                // Calculate Pinch Distance
+                const distance = Math.hypot(indexX - thumbX, indexY - thumbY);
+                const PINCH_THRESHOLD = 45; // pixels
+
+                const handStatusEl = document.getElementById('hand-status');
+
+                if (distance < PINCH_THRESHOLD) {
+                    if (!isPinching) {
+                        isPinching = true;
+                        // Auto lock card near pointer if not already holding
+                        if (activeCardIndex === -1) {
+                            findAndGrabNearestCard(indexX, indexY);
+                        }
+                    }
+                    handStatusEl.innerHTML = '<span>🤏</span> <span class="text-amber-400 font-bold">MEMEGANG KAD</span>';
+                } else {
+                    if (isPinching) {
+                        isPinching = false;
+                    }
+                    handStatusEl.innerHTML = '<span>🖐️</span> <span class="text-cyan-300">JARI TERBUKA (SEDIA)</span>';
+                }
+
+                // Draw Holographic Reticle at Index Tip
+                drawReticle(indexX, indexY, isPinching);
+
+            } else {
+                handDetected = false;
+                document.getElementById('hand-status').innerHTML = '<span>🖐️</span> <span class="text-gray-400">CARIAN TANGAN...</span>';
+            }
+            canvasCtx.restore();
+        }
+
+        function findAndGrabNearestCard(x, y) {
+            cardsState.forEach((card, idx) => {
+                if (card.isLocked) return;
+                const cardCenterX = card.x + card.width / 2;
+                const cardCenterY = card.y + card.height / 2;
+                const dist = Math.hypot(x - cardCenterX, y - cardCenterY);
+
+                if (dist < 120) {
+                    activeCardIndex = idx;
+                    sounds.playPickup();
+                }
+            });
+        }
+
+        function drawCyberHand(landmarks) {
+            // Hand Connection Pairs
+            const connections = [
+                [0,1],[1,2],[2,3],[3,4],
+                [0,5],[5,6],[6,7],[7,8],
+                [5,9],[9,10],[10,11],[11,12],
+                [9,13],[13,14],[14,15],[15,16],
+                [13,17],[17,18],[18,19],[19,20],[0,17]
+            ];
+
+            const colorLine = isPinching ? 'rgba(245, 158, 11, 0.8)' : 'rgba(6, 182, 212, 0.8)';
+            const colorJoint = isPinching ? '#f59e0b' : '#06b6d4';
+
+            // Draw Lines
+            canvasCtx.strokeStyle = colorLine;
+            canvasCtx.lineWidth = 3;
+            canvasCtx.shadowColor = colorJoint;
+            canvasCtx.shadowBlur = 12;
+
+            connections.forEach(([i, j]) => {
+                const pt1 = landmarks[i];
+                const pt2 = landmarks[j];
+                canvasCtx.beginPath();
+                canvasCtx.moveTo((1 - pt1.x) * canvasElement.width, pt1.y * canvasElement.height);
+                canvasCtx.lineTo((1 - pt2.x) * canvasElement.width, pt2.y * canvasElement.height);
+                canvasCtx.stroke();
+            });
+
+            // Draw Joint Nodes
+            landmarks.forEach((pt) => {
+                const px = (1 - pt.x) * canvasElement.width;
+                const py = pt.y * canvasElement.height;
+                canvasCtx.fillStyle = colorJoint;
+                canvasCtx.beginPath();
+                canvasCtx.arc(px, py, 5, 0, 2 * Math.PI);
+                canvasCtx.fill();
+            });
+        }
+
+        function drawReticle(x, y, active) {
+            canvasCtx.save();
+            canvasCtx.translate(x, y);
+            canvasCtx.strokeStyle = active ? '#f59e0b' : '#06b6d4';
+            canvasCtx.fillStyle = active ? '#f59e0b' : '#06b6d4';
+            canvasCtx.lineWidth = 2;
+            canvasCtx.shadowBlur = 15;
+            canvasCtx.shadowColor = active ? '#f59e0b' : '#06b6d4';
+
+            // Outer Ring
+            canvasCtx.beginPath();
+            canvasCtx.arc(0, 0, active ? 18 : 25, 0, 2 * Math.PI);
+            canvasCtx.stroke();
+
+            // Inner Center Dot
+            canvasCtx.beginPath();
+            canvasCtx.arc(0, 0, 4, 0, 2 * Math.PI);
+            canvasCtx.fill();
+
+            // Crosshairs
+            const len = 10;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(-len - 15, 0); canvasCtx.lineTo(-15, 0);
+            canvasCtx.moveTo(15, 0); canvasCtx.lineTo(len + 15, 0);
+            canvasCtx.moveTo(0, -len - 15); canvasCtx.lineTo(0, -15);
+            canvasCtx.moveTo(0, 15); canvasCtx.lineTo(0, len + 15);
+            canvasCtx.stroke();
+
+            // Reticle Text
+            canvasCtx.font = 'bold 12px Orbitron';
+            canvasCtx.textAlign = 'center';
+            canvasCtx.fillText(active ? "✦ MEMEGANG" : "◎ TEKAN & AMBIL", 0, 40);
+
+            canvasCtx.restore();
+        }
+
+        /* ==========================================================================
+           7. INITIALIZATION & FALLBACK HANDLERS
+           ========================================================================== */
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.65,
+            minTrackingConfidence: 0.65
+        });
+
+        hands.onResults(onHandResults);
+
+        async function startCamera() {
+            try {
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({ image: videoElement });
+                    },
+                    width: 1280,
+                    height: 720
+                });
+                await camera.start();
+                document.getElementById('mode-status').innerText = '📷 KAMERA + AR HAND TRACKING';
+            } catch (err) {
+                console.warn("Camera failed or denied. Falling back to Touch/Mouse:", err);
+                enableTouchFallback();
+            }
+        }
+
+        function enableTouchFallback() {
+            isTouchMode = true;
+            document.getElementById('mode-status').innerText = '👆 MOD SENTUHAN / TOUCH AKTIF';
+            document.getElementById('hand-status').innerHTML = '<span>🖱️</span> <span>GUNA SENTUHAN / MOUSE</span>';
+            videoElement.style.display = 'none';
+
+            window.addEventListener('pointermove', (e) => {
+                pointerPos.x = e.clientX;
+                pointerPos.y = e.clientY;
+            });
+            window.addEventListener('pointerup', () => {
+                isPinching = false;
+            });
+        }
+
+        // Start Button Event
+        document.getElementById('btn-start').addEventListener('click', () => {
+            sounds.init();
+            document.getElementById('start-overlay').classList.add('hidden');
+            initStep(0);
+            updatePhysics();
+            startCamera();
+        });
+
+        // Restart Button Event
+        document.getElementById('btn-restart').addEventListener('click', () => {
+            currentStep = 0;
+            score = 0;
+            totalAttempts = 0;
+            correctMatches = 0;
+            updateStats();
+            document.getElementById('end-overlay').classList.add('hidden');
+            initStep(0);
+        });
+    </script>
+</body>
+</html>
